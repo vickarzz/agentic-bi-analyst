@@ -1,5 +1,7 @@
 # 📊 Agentic BI Analyst
 
+**LIVE DEMO : ** https://agentic-bi-analyst.streamlit.app/
+
 **Ask a bank's data a question in plain English, and get a governed, auditable answer with SQL, a chart and verified insights. Or let a team of AI agents review the whole business and test how each business line affects the others. The AI never writes free-form SQL and never touches personal data.**
 
 ![CI](https://github.com/vickarzz/agentic-bi-analyst/actions/workflows/ci.yml/badge.svg)
