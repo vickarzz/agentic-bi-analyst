@@ -6,4 +6,7 @@ langgraph>=0.2
 anthropic>=0.40
 streamlit>=1.45
 plotly>=5.20
+scikit-learn>=1.5
+scipy>=1.13
+statsmodels>=0.14
 pytest>=8.0

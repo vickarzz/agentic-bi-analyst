@@ -12,7 +12,7 @@ from bi_agent.orchestrator.verifier import verify
 
 @pytest.fixture(scope="module")
 def review(sem, db_path):
-    return BusinessReviewOrchestrator(sem=sem, db_path=db_path, writer="deterministic").run()
+    return BusinessReviewOrchestrator(sem=sem, db_path=db_path, writer="deterministic", ds=False).run()
 
 
 def _link(review, link_id):
@@ -24,7 +24,7 @@ def test_supervisor_fans_out_to_all_agents_in_parallel(review):
     assert agents[:2] == ["supervisor", "data_steward"]
     parallel = {t["agent"] for t in review["trace"] if t["group"] == "parallel"}
     assert parallel == {"domain:retail", "domain:digital", "domain:credit", "domain:payments",
-                        "domain:customer", "impact_analyst", "discovery_agent"}
+                        "domain:customer", "impact_analyst", "discovery_agent", "data_scientist"}
     assert agents[-3:] == ["synthesizer", "verifier", "respond"]
 
 
@@ -54,7 +54,7 @@ def test_briefing_is_verified_and_complete(review):
 
 
 def test_focused_request_limits_scope(sem, db_path):
-    out = BusinessReviewOrchestrator(sem=sem, db_path=db_path, writer="deterministic").run(
+    out = BusinessReviewOrchestrator(sem=sem, db_path=db_path, writer="deterministic", ds=False).run(
         "focus on credit risk and churn")
     assert set(out["scope"]["domains"]) == {"credit", "customer"}
     assert all({"credit", "customer"} & {l["from_domain"], l["to_domain"]} for l in out["links"])
@@ -84,7 +84,7 @@ def test_llm_writer_is_corrected_by_verifier(sem, db_path):
             Msgs.calls += 1
             return SimpleNamespace(content=[SimpleNamespace(text=next(drafts))])
 
-    orch = BusinessReviewOrchestrator(sem=sem, db_path=db_path, writer="llm",
+    orch = BusinessReviewOrchestrator(sem=sem, db_path=db_path, writer="llm", ds=False,
                                       llm_client=SimpleNamespace(messages=Msgs()))
     out = orch.run()
     assert Msgs.calls == 2

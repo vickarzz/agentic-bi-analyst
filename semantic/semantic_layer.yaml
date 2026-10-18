@@ -23,7 +23,7 @@ governance:
     - dim_customer.mobile_number
     - dim_customer.email
   allowed_tables: [dim_date, dim_branch, dim_product, dim_customer,
-                   fact_transaction, fact_finance, fact_remittance]
+                   fact_transaction, fact_finance, fact_remittance, fact_experiment]
 
 models:
   transactions:

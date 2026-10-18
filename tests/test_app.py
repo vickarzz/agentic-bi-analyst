@@ -33,3 +33,12 @@ def test_business_review_page():
     assert not at.exception
     labels = {m.label: m.value for m in at.metric}
     assert labels["Verifier"] == "Passed" and labels["Links confirmed"].endswith("/ 8")
+
+
+def test_data_science_lab_page():
+    from streamlit.testing.v1 import AppTest
+    os.environ["BI_AGENT_PLANNER"] = "rules"
+    at = AppTest.from_file(str(ROOT / "app" / "pages" / "3_Data_Science_Lab.py"), default_timeout=300)
+    at.run()
+    assert not at.exception
+    assert at.metric[0].label == "Validation vs planted truth"

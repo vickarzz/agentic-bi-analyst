@@ -45,15 +45,11 @@ SAMPLES = [
 
 @st.cache_resource(show_spinner="Loading semantic layer and data…")
 def get_agent() -> BIAgent:
-    try:
-        return BIAgent()
-    except DataNotFound:
-        # First run on Streamlit Cloud / HF Spaces: the .duckdb file is not in git, so build it (~5 s).
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-        import generate_data
-        from bi_agent import config
-        generate_data.write_duckdb(generate_data.build(), str(config.DB_PATH))
-        return BIAgent()
+    # First run on Streamlit Cloud: the .duckdb file is not in git, so build it (~5 s).
+    # Data from an older version of the project is rebuilt the same way.
+    from bi_agent.data_setup import ensure_current_data
+    ensure_current_data()
+    return BIAgent()
 
 
 def render_chart(out: dict, agent: BIAgent) -> None:
@@ -141,6 +137,7 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.page_link("pages/2_Business_Review.py", label="Run the multi-agent business review", icon="🧭")
+    st.page_link("pages/3_Data_Science_Lab.py", label="Open the Data Science Lab", icon="🧪")
     st.subheader("Try a question")
     for q in SAMPLES:
         if st.button(q, width="stretch"):

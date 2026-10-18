@@ -13,3 +13,15 @@ events:
     end: "2025-08-25"
     type: pricing
     owner: Payments
+  - id: western_cashback
+    name: Western region card cashback campaign
+    start: "2025-11-01"
+    end: "2026-01-31"
+    type: campaign
+    owner: Cards Business
+  - id: remit_one_tap_v2
+    name: A/B test of the one-tap remittance flow
+    start: "2026-06-01"
+    end: "2026-06-28"
+    type: experiment
+    owner: Digital Banking

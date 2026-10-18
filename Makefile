@@ -1,4 +1,4 @@
-.PHONY: setup setup-mac data test evals app ask review train publish all
+.PHONY: setup setup-mac data test evals app ask review ds train publish all
 
 setup:
 	pip install -r requirements.txt
@@ -27,7 +27,10 @@ train:
 publish:
 	bash scripts/publish_github.sh $(user)
 
+ds:
+	python -m bi_agent.ds validate --strict
+
 review:
 	python -m bi_agent.orchestrator --out reports/business_review.md
 
-all: data test evals review
+all: data test evals ds review

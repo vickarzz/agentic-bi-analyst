@@ -68,8 +68,9 @@ def _trace(agent: str, detail: str, t0: float, group: str = "") -> list[dict]:
 
 class BusinessReviewOrchestrator:
     def __init__(self, sem: SemanticLayer | None = None, db_path: str | None = None,
-                 writer: str | None = None, llm_client=None, max_rewrites: int = 2):
+                 writer: str | None = None, llm_client=None, max_rewrites: int = 2, ds: bool = True):
         self.sem = sem or default_semantic()
+        self.ds = ds                     # include the Data Science Lab agent
         self.db_path = db_path
         self.calendar = load_calendar()
         self.writer = writer or ("llm" if config.use_llm() else "deterministic")
@@ -86,11 +87,13 @@ class BusinessReviewOrchestrator:
         whole = not domains or re.search(r"\b(whole|all|entire|overall|full|every|seluruh|semua)\b", text)
         if whole:
             domains = list(DOMAINS)
-        scope = {"domains": domains, "panel_start": PANEL_START, "as_of": self.sem.as_of_date,
+        ds = bool(whole or re.search(r"\b(forecast|predict|model|churn|campaign|experiment|a/b|segment|causal)", text))
+        scope = {"domains": domains, "panel_start": PANEL_START, "as_of": self.sem.as_of_date, "ds": ds,
                  "mode": "whole business" if whole else "focused"}
         return {"scope": scope, "attempts": 0, "feedback": [], "writer": self.writer,
                 "trace": _trace("supervisor", f"scope = {scope['mode']}: {', '.join(domains)}; "
-                                f"dispatching {len(domains)} domain agents + impact analyst + discovery agent", t0)}
+                                f"dispatching {len(domains)} domain agents + impact analyst + discovery agent"
+                                f"{' + data scientist' if ds else ''}", t0)}
 
     def build_panel(self, s: ReviewState) -> dict:
         t0, log = time.perf_counter(), ToolLog()
@@ -104,6 +107,7 @@ class BusinessReviewOrchestrator:
         sends = [Send("domain_agent", {"domain": d, "panel": s["panel"]}) for d in s["scope"]["domains"]]
         sends.append(Send("impact_analyst", {"panel": s["panel"], "scope": s["scope"]}))
         sends.append(Send("discovery_agent", {"panel": s["panel"]}))
+        sends.append(Send("data_scientist", {"enabled": s["scope"].get("ds", False)}))
         return sends
 
     def domain_agent(self, payload: dict) -> dict:
@@ -124,6 +128,18 @@ class BusinessReviewOrchestrator:
         counts = pd.Series([r["verdict"] for r in results]).value_counts().to_dict()
         return {"links": results, "tool_calls": log.calls,
                 "trace": _trace("impact_analyst", f"tested {len(results)} cross-business links: {counts}", t0, "parallel")}
+
+    def data_scientist(self, payload: dict) -> dict:
+        """Data Science Lab as an agent: causal effects, churn risk, forecast, experiment, segments."""
+        t0 = time.perf_counter()
+        if not payload.get("enabled") or not self.ds:
+            return {"trace": _trace("data_scientist", "skipped (not in scope)", t0, "parallel")}
+        from ..ds.lab import run_lab
+        lab = run_lab(self.db_path)
+        errs = f"; {len(lab['errors'])} module(s) failed" if lab["errors"] else ""
+        return {"findings": lab["findings"],
+                "trace": _trace("data_scientist", f"{len(lab['findings'])} findings from causal, churn, forecast, "
+                                f"A/B and segmentation models{errs}", t0, "parallel")}
 
     def discovery_agent(self, payload: dict) -> dict:
         t0 = time.perf_counter()
@@ -195,13 +211,14 @@ class BusinessReviewOrchestrator:
     # ------------------------------------------------------------------ graph
     def _build(self):
         g = StateGraph(ReviewState)
-        for n in ("supervisor", "build_panel", "domain_agent", "impact_analyst", "discovery_agent",
+        for n in ("supervisor", "build_panel", "domain_agent", "impact_analyst", "discovery_agent", "data_scientist",
                   "synthesizer", "verifier", "respond"):
             g.add_node(n, getattr(self, n))
         g.set_entry_point("supervisor")
         g.add_edge("supervisor", "build_panel")
-        g.add_conditional_edges("build_panel", self.fan_out, ["domain_agent", "impact_analyst", "discovery_agent"])
-        g.add_edge(["domain_agent", "impact_analyst", "discovery_agent"], "synthesizer")
+        g.add_conditional_edges("build_panel", self.fan_out,
+                                ["domain_agent", "impact_analyst", "discovery_agent", "data_scientist"])
+        g.add_edge(["domain_agent", "impact_analyst", "discovery_agent", "data_scientist"], "synthesizer")
         g.add_edge("synthesizer", "verifier")
         g.add_conditional_edges("verifier", lambda s: "respond" if s["verification"]["passed"]
                                 or s["attempts"] > self.max_rewrites or self.writer != "llm" else "synthesizer",

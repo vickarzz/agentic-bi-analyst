@@ -18,31 +18,36 @@ fi
 import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)
 EOF
 
-say "1/6 Virtual environment (.venv)"
+say "1/7 Virtual environment (.venv)"
 [ -d .venv ] || "$PY" -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
 python -m pip install --upgrade pip -q
 
-say "2/6 Libraries (needs internet the first time)"
+say "2/7 Libraries (needs internet the first time)"
 pip install -r requirements.txt -q
 
-say "3/6 Synthetic bank data"
-if [ ! -f data/wadi_bank.duckdb ] || [ "${1:-}" = "--fresh" ]; then
-  python scripts/generate_data.py
+say "3/7 Synthetic bank data"
+if [ ! -f data/wadi_bank.duckdb ] || [ "${1:-}" = "--fresh" ] || \
+   ! python -c "import duckdb; duckdb.connect('data/wadi_bank.duckdb', read_only=True).execute('SELECT 1 FROM _ground_truth')" 2>/dev/null; then
+  rm -rf data/ds_cache
+  python scripts/generate_data.py      # new install, --fresh, or data from an older version
 else
-  echo "data/wadi_bank.duckdb already exists (use --fresh to rebuild)"
+  echo "data/wadi_bank.duckdb is up to date (use --fresh to rebuild)"
 fi
 
 export BI_AGENT_PLANNER=${BI_AGENT_PLANNER:-rules}
 
-say "4/6 Tests"
+say "4/7 Tests"
 python -m pytest -q
 
-say "5/6 Golden-question evals"
+say "5/7 Golden-question evals"
 python evals/run_evals.py --min-score 0.9 | tail -8
 
-say "6/6 Multi-agent business review"
+say "6/7 Data Science Lab (trains the models, ~30 seconds)"
+python -m bi_agent.ds validate --strict | tail -3
+
+say "7/7 Multi-agent business review"
 python -m bi_agent.orchestrator > /dev/null
 echo "Briefing written to reports/business_review.md"
 
@@ -53,7 +58,8 @@ All set. Everything below works offline from now on:
   source .venv/bin/activate
   streamlit run app/streamlit_app.py            # chat app + Business Review page
   python -m bi_agent.cli                         # chat in the terminal
-  python -m bi_agent.orchestrator                # whole-business review
+  python -m bi_agent.orchestrator                # whole-business review (8 agents)
+  python -m bi_agent.ds                          # Data Science Lab report
   python scripts/train_from_feedback.py          # what to teach the agents next
 
 EOF

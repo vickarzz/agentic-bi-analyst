@@ -16,6 +16,8 @@ VERDICT_ICON = {"confirmed": "✅", "contradicted": "⚠️", "not detected": "�
 
 def build_briefing(findings: list[dict], links: list[dict], discoveries: list[dict],
                    scope: dict, n_pairs: int, as_of: str) -> dict:
+    ds = [f for f in findings if f["domain"] == "data_science"]
+    findings = [f for f in findings if f["domain"] != "data_science"]
     by_domain: dict[str, list[dict]] = {}
     for f in findings:
         by_domain.setdefault(f["domain"], []).append(f)
@@ -40,11 +42,26 @@ def build_briefing(findings: list[dict], links: list[dict], discoveries: list[di
     for f in positives[:1]:
         summary.append(f["text"])
     summary = summary[:6]
+    ds_lead = [f for f in ds if f["kind"] in ("causal", "prediction")][:1]
+    summary += [f["text"] for f in ds_lead]
 
     actions = []
     for l in confirmed + not_detected:
         if l.get("action") and not l["id"].startswith("placebo"):
             actions.append({"link": l["title"], "verdict": l["verdict"], "action": l["action"]})
+    kinds = {f["kind"] for f in ds}
+    if "causal" in kinds:
+        actions.append({"link": "Cashback campaign", "verdict": "causal estimate",
+                        "action": "Budget the next campaign on the difference-in-differences effect, not the naive "
+                                  "before/after, and plan for the lift to stop when the campaign ends."})
+    if "prediction" in kinds:
+        actions.append({"link": "Churn model", "verdict": "out-of-time validated",
+                        "action": "Give the retention team the model's quarterly contact plan and re-run the fairness "
+                                  "audit at every retrain."})
+    if any(f["kind"] == "experiment" and "Recommendation: ship" in f["text"] for f in ds):
+        actions.append({"link": "One-tap remittance flow", "verdict": "A/B test passed",
+                        "action": "Ship the new flow and focus onboarding messages on younger customers, where the "
+                                  "lift is largest."})
 
     caveats = [
         "All links are statistical associations in governed, synthetic data, not proof of causation.",
@@ -71,6 +88,7 @@ def build_briefing(findings: list[dict], links: list[dict], discoveries: list[di
         "links": links,
         "discoveries": discoveries,
         "actions": actions,
+        "data_science": ds,
         "caveats": caveats,
     }
 
@@ -99,6 +117,9 @@ def to_markdown(b: dict) -> str:
         L += [f"- {d['text']}" for d in b["discoveries"]] + [""]
     L += ["## Recommended actions", ""]
     L += [f"{i}. **{a['link']}** ({a['verdict']}): {a['action']}" for i, a in enumerate(b["actions"], 1)] + [""]
+    if b.get("data_science"):
+        L += ["## Data science lab (causal, prediction, forecast, experiment, segments)", ""]
+        L += [f"- {f['text']}" for f in b["data_science"]] + [""]
     L += ["## Domain scorecards", ""]
     icon = {"alert": "🔴", "watch": "🟠", "positive": "🟢", "info": "⚪"}
     for d, v in b["domains"].items():

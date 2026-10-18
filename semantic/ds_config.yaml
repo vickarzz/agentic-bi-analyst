@@ -1,0 +1,52 @@
+# =====================================================================
+#  Data Science Lab configuration (owned and reviewed like the metrics)
+#  Business assumptions are explicit here so model decisions are auditable.
+# =====================================================================
+
+churn:
+  horizon_days: 90                 # predict churn in the next 90 days
+  min_tenure_days: 90              # score customers with at least 90 days of history
+  train_cutoffs: ["2024-06-30", "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30", "2025-09-30"]
+  validation_cutoffs: ["2025-12-31"]                 # model selection + calibration
+  test_cutoffs: ["2026-03-31", "2026-06-30"]         # out-of-time, never seen in training
+  score_cutoff: "2026-09-30"                         # today: who is at risk next quarter?
+  # Protected attributes are NOT model inputs; they are only used to audit fairness.
+  protected_attributes: [gender, nationality_group]
+  fairness_tolerance:
+    calibration_gap_pts: 2.0       # |mean predicted - observed| per group, percentage points
+    recall_gap_pts: 10.0           # difference in recall at the contact threshold
+  retention_economics:             # assumptions agreed with the business owner
+    contact_cost_sar: 40
+    save_rate: 0.25                # share of contacted would-be churners who stay
+    annual_value_sar: {Mass: 900, Affluent: 3500, Private: 12000}
+  psi_alert: 0.2                   # population stability index above this = drift alert
+
+causal:
+  campaign_event: western_cashback # from business_calendar.yaml
+  treated_region: Western
+  outcome: card transactions per customer (card purchase + e-commerce)
+  event_window: [-12, 8]           # months relative to campaign start in the event study
+  fee_cut_event: digital_fee_cut
+
+forecast:
+  target: weekly remittance volume (SAR)
+  horizon_weeks: 13
+  backtest_step_weeks: 4
+  interval: 0.8
+  # Approximate Gregorian dates of future Hijri events (update every year).
+  future_events:
+    - {name: Ramadan, start: "2027-02-08", end: "2027-03-09"}
+    - {name: Pre-Eid al-Adha, start: "2027-05-06", end: "2027-05-16"}
+
+experiment:
+  experiment_id: remit_one_tap_v2
+  primary_metric: remittances_28d
+  guardrail_metric: failed_transfers_28d
+  alpha: 0.05
+  power: 0.8
+  guardrail_margin_pts: 1.0        # failure rate per transfer may not rise by more than 1 percentage point
+
+segments:
+  lookback_months: 12
+  k_range: [2, 7]
+  bootstrap_runs: 20

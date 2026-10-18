@@ -33,6 +33,7 @@ All data is synthetic. *Wadi Bank* is fictional.
 - [S. Troubleshooting](#s-troubleshooting)
 - [T. Multi-agent orchestration: the cross-business review](#t-multi-agent-orchestration-the-cross-business-review)
 - [U. Training the agents](#u-training-the-agents)
+- [V. Data Science Lab](#v-data-science-lab)
 
 ---
 
@@ -51,8 +52,9 @@ All data is synthetic. *Wadi Bank* is fictional.
 | Semantic layer and data modeling | `semantic/semantic_layer.yaml`, `bi_agent/compiler.py` |
 | Data governance (CDMP / NDMO mindset) | PII blocking, allow-listed tables, small-cell suppression, metric owners |
 | Evaluation / LLMOps | `evals/`: golden questions checked against independent SQL, gated in CI |
-| Production engineering | 70 tests, CI pipeline, read-only connections, parameterised SQL, fallbacks |
+| Production engineering | 94 tests, CI pipeline, read-only connections, parameterised SQL, fallbacks |
 | Domain knowledge | Islamic finance (Murabaha, Ijarah, NPF), remittance corridors, digital adoption |
+| Data science | `bi_agent/ds/`: causal inference, out-of-time churn model with fairness audit, Hijri-calendar forecasting, CUPED A/B testing, segmentation, all validated against planted truth (section V) |
 
 ---
 
@@ -67,7 +69,7 @@ python -m venv .venv
 source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python scripts/generate_data.py      # ~5 seconds
-python -m pytest -q                  # 70 tests
+python -m pytest -q                  # 94 tests
 python evals/run_evals.py            # writes evals/report.md
 streamlit run app/streamlit_app.py
 ```
@@ -386,7 +388,7 @@ Charts are chosen by rule: trend → line, breakdown → bar (with a second dime
 
 ## L. Step 10: Tests and the evaluation harness
 
-### Unit and integration tests (`tests/`, 70 tests, including 10 for the orchestrator and 5 for training)
+### Unit and integration tests (`tests/`, 94 tests, including 10 for the orchestrator, 5 for training and 23 for the Data Science Lab)
 
 | File | Covers |
 |---|---|
@@ -531,7 +533,7 @@ It is the same layered pattern I used with Denodo virtual views and Power BI/Tab
 Tips: attach the demo GIF or a short video (native video gets more reach than a link), post Tuesday to Thursday in the morning, reply to comments in the first hour, and put the repo in the *Featured* section.
 
 ### CV / LinkedIn Projects bullet
-> **Agentic BI Analyst (open source):** Built a LangGraph + Claude agent that answers natural-language banking questions through a governed semantic layer (15 metrics), with a deterministic SQL compiler, three-layer PII guardrails, small-cell suppression and a CI-gated golden-question eval (100% plan and answer accuracy on 28 cases; 70 automated tests). Added a multi-agent orchestrator (supervisor, 5 parallel domain agents, impact analyst, discovery agent, verifier) that tests 8 cross-business hypotheses with permutation statistics and a placebo control..
+> **Agentic BI Analyst (open source):** Built a LangGraph + Claude system for a synthetic Saudi bank: a governed natural-language BI agent (15 metrics, deterministic SQL compiler, three-layer PII guardrails, 100% on 28 golden questions), an 8-agent business review with a verifier, and a Data Science Lab (difference-in-differences, randomisation inference and synthetic control; out-of-time churn model with calibration and fairness audit; Hijri-calendar forecasting with 3.0% WAPE; CUPED A/B testing) whose estimates recover effects planted in the data and are gated in CI; 94 automated tests.
 
 ---
 
@@ -739,3 +741,83 @@ These tests run on the small 3,000-customer test database, so they also show the
 **Cloud note.** On the free Streamlit tier the log resets when the app restarts. Run the loop locally, or (next step) send feedback to a database or a sheet.
 
 **Tests.** `tests/test_training.py` covers the log round-trip, the report sections, synonym teaching (including refusing ambiguous words) and alias validation against real dimension values.
+
+---
+
+## V. Data Science Lab
+
+### V1. Why it exists, and the idea that makes it credible
+
+The agents answer "what happened". A data scientist is hired to answer "why", "what will happen" and "what should we do", and to show the answer is right. Real data cannot prove a method is right, because nobody knows the true effect. **Synthetic data can**: the generator plants known effects, and each method must recover them. `python -m bi_agent.ds validate --strict` compares every estimate with the planted truth and fails CI if one misses.
+
+| Planted in `scripts/generate_data.py` (`GROUND_TRUTH`) | Recovered by |
+|---|---|
+| Western card cashback campaign, Nov 2025 to Jan 2026: **+18%** card transactions, none before or after | Difference-in-differences, event study, synthetic control |
+| Digital fee cut, Aug 2025: **no** behavioural effect (digital share keeps its trend) | Interrupted time series vs a naive before/after |
+| Customers thin out their transactions in the **120 days before churning** | Churn model features (activity, recency) |
+| Ramadan days **×1.35**, pre-Eid **×1.25**, payday **×1.10** remittance intensity | Calendar regression coefficients |
+| One-tap flow A/B test: lift **+10% (18–24) falling to 0% (55+)**, about **+5.8%** overall | CUPED readout, age-band effects |
+
+The signals use a separate random stream after the base tables are built, so every BI number published earlier (NPF 3.3x, fee −24.7%, r = +0.98) is unchanged.
+
+### V2. Governance carries over
+
+- Every query is a reviewed SQL template (`bi_agent/ds/*.py`, `template()`) that must pass the agents' SQL guard: allow-listed tables, no PII columns, read-only. A test runs every template through the guard and checks a PII query is rejected.
+- Gender and nationality are **not model inputs**; they are used only for the fairness audit. Finance status is excluded because it reflects the as-of date (future leakage).
+- The UI and reports show aggregates only; groups under 10 customers are suppressed. A scored customer list would go to the CRM under access control, not to the chat.
+- Business assumptions (call cost, save rate, customer value, fairness tolerances, PSI alert) live in `semantic/ds_config.yaml`, owned and reviewed like metrics.
+
+### V3. Causal inference (`bi_agent/ds/causal.py`)
+
+**Campaign.** Unit = city (4 Western treated, 13 controls), month panel 2024-01 to 2026-09, outcome = log card transactions per customer on the book.
+1. *Naive before/after* (campaign months vs the 3 months before): +13.5%. Biased by seasonality and trend.
+2. *DiD with two-way fixed effects* (`y ~ D + C(city) + C(month)`), errors clustered by city with small-sample t: **+17.0% (95% CI +12.9% to +21.2%)**.
+3. *Randomisation inference*: with a balanced panel the TWFE estimate equals a difference of city means, so all C(17,4) = 2,380 alternative "treated" sets are cheap to compute. Only 1 in 2,380 is as extreme as the real one (p < 0.001). This is exact and does not rely on 17 clusters being "enough".
+4. *Event study* (leads and lags, reference month −1): flat before, about +20% in the three campaign months, back to zero after. A small differential pre-trend (−0.2% a month, p = 0.05) is reported, and a DiD with a treated-group trend gives +18.4%, so the conclusion is robust.
+5. *Synthetic control*: Western as a weighted mix of control cities (non-negative weights summing to 1, fitted on the pre-period), **+16.8%**, ranked 1st of 14 in placebo-in-space tests (p = 0.071, the smallest possible with 13 donors; said openly).
+
+**Fee cut.** The cut only touched digital fees, so if it worked, customers would move to digital faster. The digital share was already rising +0.9 pts a month. Interrupted time series `share ~ t + post` (plus slope-change and quadratic variants, chosen by AIC) gives **+0.4 pts (CI −0.2 to +0.9)**, inside the range of 9 placebo dates. A first design (digital vs branch counts with group trends) failed its placebo test, so it was replaced; that is the method working as intended.
+
+### V4. Churn model (`bi_agent/ds/churn.py`, `features.py`)
+
+- **Point-in-time features** at quarterly cutoffs T, label = churn in (T, T+90]. A test deletes every row after T and checks no feature changes.
+- **Out-of-time split**: train 6 cutoffs (2024-06 to 2025-09), validate 2025-12, test 2026-03 and 2026-06.
+- **Model choice** on validation PR-AUC (churn is about 1% a quarter, so ROC-AUC alone flatters): logistic regression narrowly beat gradient boosting, which is a fair result to report.
+- **Isotonic calibration** on validation; Brier 0.0119 vs 0.0128 for the base rate.
+- **Explainability**: permutation importance (by ROC-AUC; a collinear duplicate feature was removed after it distorted the ranking) and per-customer reason codes (risk change when a feature is set to a typical value).
+- **Fairness**: calibration gap and recall at the contact threshold by gender and nationality, with tolerances from config.
+- **Decision**: call a customer when risk × save rate × annual value > call cost. The UI sliders recompute the plan; the backtest on the test period shows what the rule would have returned.
+- **Monitoring**: PSI between training and current scores; the model card (`reports/ds/churn_model_card.md`) documents use, data, metrics, fairness and limitations.
+
+### V5. Forecasting (`bi_agent/ds/forecast.py`)
+
+Weekly remittance volume, log-linear model with Ramadan, pre-Eid and payday shares of each week, annual Fourier terms and trend; small ridge penalty. **20 rolling-origin backtests** (train before the origin, forecast 13 weeks) against "same week last year" and a 4-week average: WAPE 3.0% vs 11.8% vs 9.5%. Around Ramadan 2026, which came 11 days earlier than in 2025, the calendar model's error is 3.4% vs 14.7%. Intervals come from backtest errors by horizon; future Hijri dates are in `ds_config.yaml` and must be updated yearly.
+
+### V6. A/B testing (`bi_agent/ds/experiment.py`)
+
+`fact_experiment` mimics an experimentation platform export. The readout checks the sample ratio (chi-square), estimates the lift (Welch test, delta-method CI), applies **CUPED** with pre-period remittances (variance −33%), reports Bonferroni-adjusted age effects, checks a guardrail (failure rate per transfer, bootstrap one-sided bound, 1-point margin), computes the minimum detectable effect and sample sizes, and runs 500 A/A splits (false-positive rate 4.8%). Result: without CUPED the test is inconclusive (+3.7%, p = 0.20); with CUPED it is +5.2% (p = 0.027). Per-age effects follow the planted gradient but none is significant alone, because the test was powered for the overall effect, which is stated rather than hidden.
+
+### V7. Segmentation (`bi_agent/ds/segments.py`)
+
+Twelve-month features per active sender (frequency, log average amount, recency, digital share, months active), standardised; k from 2 to 7 by silhouette; stability by refitting on 20 bootstrap samples (ARI 0.95). Two segments: frequent senders (61% of senders, 74% of volume) and occasional, lapsing senders. The silhouette of 0.26 means the groups overlap; the report says so.
+
+### V8. How it plugs into the rest
+
+- **Agent**: `data_scientist` is the eighth parallel node in the business review; its findings pass the same verifier, and three actions (campaign budgeting, retention plan, ship decision) are added.
+- **App**: `app/pages/3_Data_Science_Lab.py` (tabs for each module, interactive economics and power calculator, validation table, model card).
+- **Cache**: results are cached per data snapshot and code version (`data/ds_cache/`); a first run takes about 20–30 seconds.
+- **CI**: `python -m bi_agent.ds validate --strict` after the evals; the validation table is posted to the job summary.
+
+### V9. Interview talking points
+
+- *"How do you know your causal estimate is right?"* I planted +18% and recovered +17.0% with a CI covering it, confirmed by randomisation inference, an event study and a synthetic control. The naive number was off by four points.
+- *"Tell me about a time a method failed."* My first fee-cut design failed its placebo test, so I replaced it with an interrupted time series that passes placebos across five data seeds.
+- *"Why not just use XGBoost?"* I compared it. On rare churn, a calibrated logistic regression matched it out of time and is easier to explain to a model-risk committee.
+- *"How do you keep models fair?"* Protected attributes are excluded from inputs and used to audit calibration and recall by group, with tolerances in config and a check in CI.
+- *"What would you do next?"* An uplift model on a randomised retention experiment, so we call the customers whose behaviour a call changes, not just the riskiest.
+
+### V10. Limitations
+
+- Synthetic data: the methods are shown to recover planted effects, not to discover unknown ones in messy real data.
+- At smaller sample sizes, the guardrail and fairness checks can fail by chance (tested with 8,000-customer databases across seeds); the checks are calibrated for the default 20,000 customers.
+- 33 months is short for yearly seasonality; with real data, use more history and holiday calendars per corridor.

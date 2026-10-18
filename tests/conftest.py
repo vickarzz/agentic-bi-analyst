@@ -29,3 +29,17 @@ def db_path(tmp_path_factory):
 def agent(db_path, sem):
     from bi_agent.graph import BIAgent
     return BIAgent(sem=sem, db_path=db_path, planner="rules")
+
+
+@pytest.fixture(scope="session")
+def ds_db_path(tmp_path_factory):
+    """A medium database for the Data Science Lab (models need more customers than the BI tests)."""
+    path = tmp_path_factory.mktemp("ds") / "ds.duckdb"
+    generate_data.write_duckdb(generate_data.build(n_customers=8000, seed=11), str(path))
+    return str(path)
+
+
+@pytest.fixture(scope="session")
+def ds_lab(ds_db_path):
+    from bi_agent.ds.lab import run_lab
+    return run_lab(ds_db_path)          # cached next to the test database for later tests

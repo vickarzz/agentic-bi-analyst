@@ -14,7 +14,6 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from bi_agent import config  # noqa: E402
 from bi_agent.db import DataNotFound  # noqa: E402
 from bi_agent.orchestrator.domains import DOMAINS  # noqa: E402
 from bi_agent.orchestrator.graph import BusinessReviewOrchestrator  # noqa: E402
@@ -33,10 +32,8 @@ VERDICT_COLOR = {"confirmed": "#0E6E69", "not detected": "#9CA3AF", "contradicte
 
 
 def ensure_data():
-    if not config.DB_PATH.exists():
-        sys.path.insert(0, str(ROOT / "scripts"))
-        import generate_data
-        generate_data.write_duckdb(generate_data.build(), str(config.DB_PATH))
+    from bi_agent.data_setup import ensure_current_data
+    ensure_current_data()          # builds the data on first start, or rebuilds data from an older version
 
 
 @st.cache_data(show_spinner=False)
@@ -80,14 +77,14 @@ def impact_map(links: list[dict]) -> go.Figure:
 
 
 st.title("🧭 Cross-business review")
-st.markdown("<p class='tagline'>A supervisor agent dispatches five domain agents, an impact analyst and a discovery agent "
-            "in parallel, then a synthesizer writes the briefing and a verifier checks every number. "
+st.markdown("<p class='tagline'>A supervisor agent dispatches five domain agents, an impact analyst, a discovery agent "
+            "and a data scientist in parallel, then a synthesizer writes the briefing and a verifier checks every number. "
             "Governed metrics only · synthetic data.</p>", unsafe_allow_html=True)
 
 request = st.text_input("What should the agents review?",
                         "Review the whole business and how each line affects the others")
 if st.button("Run review", type="primary") or "review" not in st.session_state:
-    with st.spinner("Supervisor → 7 agents in parallel → synthesizer → verifier…"):
+    with st.spinner("Supervisor → 8 agents in parallel → synthesizer → verifier (first run trains the models, ~30 s)…"):
         try:
             st.session_state.review = run_review(request)
         except DataNotFound as e:
@@ -116,7 +113,8 @@ with right:
     st.caption("Lines connect business lines whose link was tested. Hover the dots for evidence. "
                "Ring markers are links inside one business line.")
 
-tabs = st.tabs(["Impact tests", "Actions", "Risks", "Domain scorecards", "Discovery", "Agent trace", "Full briefing"])
+tabs = st.tabs(["Impact tests", "Actions", "Risks", "Domain scorecards", "Discovery", "Data science", "Agent trace",
+                "Full briefing"])
 with tabs[0]:
     df = pd.DataFrame([{"Link": l["title"], "Verdict": l["verdict"], "Test": l["test_type"],
                         "Effect": l["effect"], "p-value": l["p_value"], "Evidence": l["summary"]} for l in links])
@@ -169,6 +167,17 @@ with tabs[4]:
     if not b["discoveries"]:
         st.write("No new cross-domain candidates beyond the curated hypotheses.")
 with tabs[5]:
+    ds = b.get("data_science", [])
+    if ds:
+        for f in ds:
+            st.markdown(f"<div class='card'>{f['text']}</div>", unsafe_allow_html=True)
+        try:
+            st.page_link("pages/3_Data_Science_Lab.py", label="Open the Data Science Lab for charts and the model card", icon="🧪")
+        except Exception:  # noqa: BLE001 - page links only resolve when launched from the main app
+            st.caption("Open the Data Science Lab page for charts and the model card.")
+    else:
+        st.write("The data scientist was not in scope for this request.")
+with tabs[6]:
     tr = pd.DataFrame(out["trace"])
     st.dataframe(tr, width="stretch", hide_index=True)
     fig = px.bar(tr, x="ms", y="agent", color="group", orientation="h", labels={"ms": "milliseconds", "agent": ""},
@@ -176,7 +185,7 @@ with tabs[5]:
     fig.update_layout(height=380, template="plotly_white", yaxis=dict(autorange="reversed"), showlegend=False)
     st.plotly_chart(fig, width="stretch")
     st.caption(f"{len(out['tool_calls'])} governed tool calls. Teal bars ran in parallel.")
-with tabs[6]:
+with tabs[7]:
     st.markdown(out["markdown"])
     st.download_button("Download briefing (.md)", out["markdown"], "business_review.md")
     st.download_button("Download briefing (.json)", json.dumps(b, indent=2, default=str), "business_review.json")

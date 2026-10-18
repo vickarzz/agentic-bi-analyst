@@ -16,7 +16,8 @@ Panduan ini untuk pemilik proyek. Dokumentasi teknis berbahasa Inggris ada di `R
 | `semantic/` | **"Pengetahuan" agent** dalam bentuk YAML: metrik, sinonim, hipotesis dampak, kalender bisnis |
 | `scripts/` | Generator data, setup sekali jalan, publish ke GitHub, dan **alat training** |
 | `evals/` | Pertanyaan uji (golden questions) dan laporan akurasi |
-| `tests/` | 70 test otomatis |
+| `bi_agent/ds/` | **Data Science Lab**: causal inference, model churn, forecasting, A/B test, segmentasi |
+| `tests/` | 94 test otomatis |
 | `docs/presentation/` | Deck PowerPoint dan PDF (43 slide) |
 | `docs/examples/` | Contoh briefing hasil multi-agent |
 | `docs/APPENDIX.md` | Penjelasan pembuatan langkah demi langkah (Inggris) |
@@ -36,10 +37,11 @@ Skrip ini otomatis:
 1. membuat virtual environment `.venv`
 2. menginstall semua library (hanya kali ini butuh internet)
 3. membuat data dummy bank
-4. menjalankan 70 test
+4. menjalankan 94 test
 5. menjalankan evaluasi 28 pertanyaan
-6. menjalankan review multi-agent
-7. membuka aplikasi di **http://localhost:8501**
+6. menjalankan Data Science Lab dan mengecek hasilnya terhadap efek yang ditanam (17 pemeriksaan)
+7. menjalankan review multi-agent (8 agent)
+8. membuka aplikasi di **http://localhost:8501**
 
 Setelah itu semuanya **offline**. Untuk membuka lagi di lain hari:
 
@@ -105,6 +107,38 @@ Streamlit akan otomatis memperbarui link demo dalam beberapa menit.
 - **LinkedIn:** masukkan ke bagian Featured dan Projects, lalu posting dengan video demo 30 detik (draf post ada di `docs/APPENDIX.md` bagian Q)
 
 ---
+
+## 2b. Data Science Lab (untuk role data scientist)
+
+Lima analisis yang biasa ditanyakan di interview data scientist. Semuanya memakai data yang sama dan dicek terhadap efek yang **sengaja ditanam** di data sintetis, sehingga kita tahu metodenya benar.
+
+| Modul | Pertanyaan bisnis | Metode | Hasil |
+|---|---|---|---|
+| Causal inference | Apakah kampanye cashback Western berhasil? | Difference-in-differences, randomisation inference, event study, synthetic control | +17,0% (efek yang ditanam +18%) |
+| | Apakah fee cut membuat nasabah pindah ke digital? | Interrupted time series + placebo | Metode naif +11,2%, metode benar ≈ 0 |
+| Model churn | Siapa yang akan keluar 90 hari ke depan, dan apakah layak ditelepon? | Fitur point-in-time, validasi out-of-time, kalibrasi, audit fairness, hitungan ekonomi | ROC-AUC 0,92; 10% teratas menangkap 73% churner |
+| Forecasting | Berapa remitansi kuartal depan? | Regresi kalender Hijriah + 20 backtest | Error 3,0% vs 11,8% metode "minggu yang sama tahun lalu" |
+| A/B test | Apakah fitur one-tap layak dirilis? | SRM, CUPED, power, efek per usia, guardrail, A/A | +5,2% (tanpa CUPED tidak meyakinkan) |
+| Segmentasi | Ada tipe pengirim remitansi apa saja? | K-means + stabilitas bootstrap | 2 segmen stabil (ARI 0,95) |
+
+Cara menjalankan:
+```bash
+python -m bi_agent.ds                    # semua modul → reports/ds/lab_report.md + churn_model_card.md
+python -m bi_agent.ds validate --strict  # 17 pemeriksaan terhadap efek yang ditanam
+```
+Di aplikasi, klik **Data Science Lab** di sidebar. Pertama kali dibuka perlu sekitar 20–30 detik untuk melatih model, setelah itu tersimpan di cache. Hasilnya juga ikut masuk ke Business Review sebagai **agent ke-8 (data scientist)**.
+
+Penjelasan lengkap dan bahan interview ada di `docs/APPENDIX.md` bagian V.
+
+### Cara update proyek di Mac (kalau sudah punya versi sebelumnya)
+```bash
+cd ~/Downloads && unzip -o agentic-bi-analyst-ds.zip          # ekstrak versi baru
+rsync -a ~/Downloads/agentic-bi-analyst/ ~/Projects/agentic-bi-analyst/
+cd ~/Projects/agentic-bi-analyst
+bash scripts/setup_mac.sh --run                                # install library baru + data versi baru otomatis
+bash scripts/publish_github.sh vickarzz                        # kirim ke GitHub, demo ikut ter-update
+```
+`rsync` menimpa file kode tapi tetap menyimpan `.git` dan `.venv` Anda. Data lama otomatis dibangun ulang karena versinya berbeda.
 
 ## 3. Cara "melatih" agent
 

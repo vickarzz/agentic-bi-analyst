@@ -7,6 +7,7 @@ Creates a small star schema in DuckDB:
 
     dim_date, dim_branch, dim_product, dim_customer           (dimensions)
     fact_transaction, fact_finance, fact_remittance           (facts)
+    fact_experiment                                           (A/B test readout)
 
 Built-in business patterns (so the agent has real "stories" to find):
   * Digital adoption (Mobile App + Internet Banking share) rises from ~50% to ~75%.
@@ -23,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import date
 
@@ -287,9 +289,88 @@ def build(n_customers: int = 20_000, seed: int = 42) -> dict[str, pd.DataFrame]:
     dim_date = pd.DataFrame({"date": d, "year": d.year, "quarter": d.quarter, "month": d.month,
                              "month_name": d.strftime("%b"), "day_of_week": d.strftime("%a")})
 
-    return {"dim_date": dim_date, "dim_branch": dim_branch, "dim_product": dim_product,
-            "dim_customer": dim_customer, "fact_transaction": fact_transaction,
-            "fact_finance": fact_finance, "fact_remittance": fact_remittance}
+    tables = {"dim_date": dim_date, "dim_branch": dim_branch, "dim_product": dim_product,
+              "dim_customer": dim_customer, "fact_transaction": fact_transaction,
+              "fact_finance": fact_finance, "fact_remittance": fact_remittance}
+    return plant_ds_signals(tables, seed)
+
+
+# ---------------------------------------------------------------------------
+# Data-science ground truth. These signals are planted with a SEPARATE random
+# stream after the base tables are built, so the BI numbers stay stable. The
+# Data Science Lab (bi_agent/ds) must recover them; `python -m bi_agent.ds validate`
+# compares every estimate with these planted values.
+# ---------------------------------------------------------------------------
+GROUND_TRUTH = {
+    "pre_churn_disengagement": {
+        "window_days": 120, "max_drop": 0.7,
+        "description": "Transactions thin out in the 120 days before a customer churns (up to 70% fewer).",
+    },
+    "campaign": {
+        "id": "western_cashback", "name": "Western region card cashback campaign",
+        "region": "Western", "start": "2025-11-01", "end": "2026-01-31", "uplift": 0.18,
+        "description": "Card purchase and e-commerce transactions of Western-region customers rise 18% "
+                       "during the campaign; no effect before or after.",
+    },
+    "experiment": {
+        "id": "remit_one_tap_v2", "name": "One-tap remittance flow in the mobile app",
+        "start": "2026-06-01", "days": 28,
+        "lift_by_age": {"18-24": 0.10, "25-34": 0.09, "35-44": 0.05, "45-54": 0.02, "55+": 0.0},
+        "description": "Randomised 50/50 test on active expat remitters; the new flow lifts remittances "
+                       "most for younger customers and not at all for 55+.",
+    },
+    "fee_cut": {
+        "date": "2025-08-25", "volume_effect": 0.0,
+        "description": "The digital fee fell from SAR 15 to SAR 10; customer behaviour did not change.",
+    },
+}
+
+
+def plant_ds_signals(t: dict[str, pd.DataFrame], seed: int) -> dict[str, pd.DataFrame]:
+    rng = np.random.default_rng(seed + 1_000)
+    ft, cust, br = t["fact_transaction"], t["dim_customer"], t["dim_branch"]
+
+    # 1) disengagement before churn: drop a growing share of transactions as churn approaches
+    g = GROUND_TRUTH["pre_churn_disengagement"]
+    churn_date = ft["customer_id"].map(cust.set_index("customer_id")["churn_date"])
+    days_before = (churn_date - ft["txn_date"]).dt.days
+    p_drop = (g["max_drop"] * (1 - days_before / g["window_days"])).where(days_before.between(0, g["window_days"] - 1), 0)
+    ft = ft[~(rng.random(len(ft)) < p_drop.fillna(0).to_numpy())]
+
+    # 2) regional campaign: extra card transactions for Western customers during the campaign
+    c = GROUND_TRUTH["campaign"]
+    region = cust["branch_id"].map(br.set_index("branch_id")["region"])
+    treated = set(cust.loc[region == c["region"], "customer_id"])
+    in_campaign = (ft["customer_id"].isin(treated) & ft["txn_type"].isin(["Card Purchase", "E-commerce"])
+                   & ft["txn_date"].between(pd.Timestamp(c["start"]), pd.Timestamp(c["end"])))
+    base = ft[in_campaign]
+    extra = base.iloc[rng.choice(len(base), int(round(len(base) * c["uplift"])), replace=False)].copy()
+    extra["amount_sar"] = rng.permutation(base["amount_sar"].to_numpy())[: len(extra)]  # same amount distribution
+    ft = pd.concat([ft, extra]).sort_values(["txn_date", "txn_id"]).reset_index(drop=True)
+    ft["txn_id"] = np.arange(1, len(ft) + 1)
+    t["fact_transaction"] = ft
+
+    # 3) a randomised A/B test, as an experimentation platform would export it
+    e = GROUND_TRUTH["experiment"]
+    start = pd.Timestamp(e["start"])
+    fr = t["fact_remittance"]
+    pre_window = fr[(fr["remittance_date"] >= start - pd.Timedelta(days=e["days"])) & (fr["remittance_date"] < start)]
+    recent = set(fr.loc[(fr["remittance_date"] >= start - pd.Timedelta(days=90)) & (fr["remittance_date"] < start), "customer_id"])
+    alive = cust["churn_date"].isna() | (cust["churn_date"] >= start + pd.Timedelta(days=e["days"]))
+    elig = cust[(cust["nationality_group"] == "Expat") & alive & cust["customer_id"].isin(recent)].copy()
+    elig["pre"] = elig["customer_id"].map(pre_window.groupby("customer_id").size()).fillna(0).astype(int)
+    treat = rng.random(len(elig)) < 0.5
+    lift = elig["age_band"].map(e["lift_by_age"]).to_numpy() * treat
+    lam = (0.45 + 0.8 * elig["pre"].to_numpy()) * (1 + lift)
+    y = rng.poisson(lam)
+    t["fact_experiment"] = pd.DataFrame({
+        "experiment_id": e["id"], "customer_id": elig["customer_id"].to_numpy(),
+        "variant": np.where(treat, "treatment", "control"), "assigned_date": start,
+        "pre_remittances_28d": elig["pre"].to_numpy(), "remittances_28d": y,
+        "amount_28d_sar": np.round(y * rng.lognormal(np.log(1500), 0.35, len(y)), 2),
+        "failed_transfers_28d": rng.binomial(y, 0.03),          # guardrail: 3% of transfers fail in both arms
+    })
+    return t
 
 
 def write_duckdb(tables: dict[str, pd.DataFrame], path: str) -> None:
@@ -305,6 +386,8 @@ def write_duckdb(tables: dict[str, pd.DataFrame], path: str) -> None:
         con.unregister("tmp_df")
     con.execute("CREATE TABLE _metadata AS SELECT ? AS as_of_date, ? AS generated_by",
                 [date(END.year, END.month, END.day), "scripts/generate_data.py (synthetic)"])
+    # planted truth, used ONLY by `python -m bi_agent.ds validate` (never by the agents)
+    con.execute("CREATE TABLE _ground_truth AS SELECT ? AS truth_json", [json.dumps(GROUND_TRUTH)])
     con.close()
 
 

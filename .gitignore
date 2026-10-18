@@ -8,3 +8,4 @@ data/*.duckdb.wal
 .streamlit/secrets.toml
 reports/
 data/feedback/
+data/ds_cache/

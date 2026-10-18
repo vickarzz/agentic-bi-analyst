@@ -23,10 +23,13 @@ jobs:
         run: python -m pytest -q
       - name: Golden-question evaluation (fails below 90%)
         run: python evals/run_evals.py --min-score 0.9
+      - name: Data Science Lab (estimates must recover the planted truth)
+        run: python -m bi_agent.ds validate --strict
       - name: Multi-agent business review
         run: python -m bi_agent.orchestrator --out reports/business_review.md
       - name: Publish eval report and briefing to the job summary
         if: always()
         run: |
           cat evals/report.md >> "$GITHUB_STEP_SUMMARY"
+          cat reports/ds/validation.md >> "$GITHUB_STEP_SUMMARY" || true
           cat reports/business_review.md >> "$GITHUB_STEP_SUMMARY" || true
