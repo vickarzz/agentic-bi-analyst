@@ -1,0 +1,15 @@
+# Business calendar: dated events agents use to explain anomalies and test impacts.
+# Dates for Ramadan / Eid are approximate Gregorian windows. Wadi Bank is fictional.
+events:
+  - {id: ramadan_2024, name: Ramadan, start: "2024-03-11", end: "2024-04-09", type: seasonal}
+  - {id: eid_adha_2024, name: Pre-Eid al-Adha, start: "2024-06-06", end: "2024-06-16", type: seasonal}
+  - {id: ramadan_2025, name: Ramadan, start: "2025-03-01", end: "2025-03-30", type: seasonal}
+  - {id: eid_adha_2025, name: Pre-Eid al-Adha, start: "2025-05-27", end: "2025-06-06", type: seasonal}
+  - {id: ramadan_2026, name: Ramadan, start: "2026-02-18", end: "2026-03-19", type: seasonal}
+  - {id: eid_adha_2026, name: Pre-Eid al-Adha, start: "2026-05-17", end: "2026-05-27", type: seasonal}
+  - id: digital_fee_cut
+    name: Digital remittance fee cut (SAR 15 → SAR 10)
+    start: "2025-08-25"
+    end: "2025-08-25"
+    type: pricing
+    owner: Payments

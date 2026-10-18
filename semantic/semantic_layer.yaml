@@ -1,0 +1,282 @@
+# =====================================================================
+#  Wadi Bank (fictional) — governed semantic layer
+# ---------------------------------------------------------------------
+#  This file is the single source of truth for business metrics.
+#  The AI agent is NOT allowed to write free-form SQL. It may only pick
+#  metrics, dimensions and filters defined here; the compiler turns that
+#  plan into SQL. Same definitions -> same numbers in every dashboard.
+#
+#  Concepts (similar to dbt MetricFlow, Cube, Power BI semantic models
+#  or Denodo derived views):
+#    models      : a fact table + the joins it is allowed to use
+#    dimensions  : how a metric can be sliced (segment, region, ...)
+#    metrics     : governed calculations with an owner and definition
+# =====================================================================
+version: 1
+as_of_date: "2026-09-30"   # last date in the synthetic dataset
+
+governance:
+  small_cell_threshold: 10     # groups with fewer customers are suppressed
+  max_rows: 500                # hard LIMIT on every query
+  pii_columns:                 # never exposed, never selectable
+    - dim_customer.full_name
+    - dim_customer.mobile_number
+    - dim_customer.email
+  allowed_tables: [dim_date, dim_branch, dim_product, dim_customer,
+                   fact_transaction, fact_finance, fact_remittance]
+
+models:
+  transactions:
+    table: fact_transaction
+    alias: t
+    time_column: t.txn_date
+    customer_key: t.customer_id
+    joins:
+      c: {sql: "LEFT JOIN dim_customer c ON c.customer_id = t.customer_id"}
+      p: {sql: "LEFT JOIN dim_product p ON p.product_id = t.product_id"}
+      b: {sql: "LEFT JOIN dim_branch b ON b.branch_id = c.branch_id", requires: [c]}
+
+  finance:
+    table: fact_finance
+    alias: f
+    time_column: f.disbursement_date
+    customer_key: f.customer_id
+    joins:
+      c: {sql: "LEFT JOIN dim_customer c ON c.customer_id = f.customer_id"}
+      p: {sql: "LEFT JOIN dim_product p ON p.product_id = f.product_id"}
+      b: {sql: "LEFT JOIN dim_branch b ON b.branch_id = c.branch_id", requires: [c]}
+
+  remittances:
+    table: fact_remittance
+    alias: r
+    time_column: r.remittance_date
+    customer_key: r.customer_id
+    joins:
+      c: {sql: "LEFT JOIN dim_customer c ON c.customer_id = r.customer_id"}
+      b: {sql: "LEFT JOIN dim_branch b ON b.branch_id = c.branch_id", requires: [c]}
+
+  customers:
+    table: dim_customer
+    alias: c
+    time_column: c.join_date
+    customer_key: c.customer_id
+    joins:
+      b: {sql: "LEFT JOIN dim_branch b ON b.branch_id = c.branch_id"}
+
+  churn:
+    table: dim_customer
+    alias: c
+    time_column: c.churn_date
+    customer_key: c.customer_id
+    where: "c.churn_date IS NOT NULL"
+    joins:
+      b: {sql: "LEFT JOIN dim_branch b ON b.branch_id = c.branch_id"}
+
+# ---------------------------------------------------------------------
+dimensions:
+  segment:
+    expr: c.segment
+    requires: [c]
+    description: Customer value segment (Mass, Affluent, Private)
+    synonyms: [segment, segments, customer segment, tier]
+  nationality_group:
+    expr: c.nationality_group
+    requires: [c]
+    description: Saudi vs Expat customers
+    synonyms: [nationality, saudi vs expat, citizenship]
+  age_band:
+    expr: c.age_band
+    requires: [c]
+    description: Customer age band
+    synonyms: [age, age band, age group]
+  gender:
+    expr: c.gender
+    requires: [c]
+    description: Customer gender
+    synonyms: [gender]
+  region:
+    expr: b.region
+    requires: [c, b]
+    description: Region of the customer's home branch
+    synonyms: [region, regions, area, province]
+  city:
+    expr: b.city
+    requires: [c, b]
+    description: City of the customer's home branch
+    synonyms: [city, cities]
+  branch:
+    expr: b.branch_name
+    requires: [c, b]
+    description: Customer's home branch
+    synonyms: [branch, branches]
+  product:
+    expr: p.product_name
+    requires: [p]
+    models: [transactions, finance]
+    description: Product name
+    synonyms: [product, products]
+  product_category:
+    expr: p.product_category
+    requires: [p]
+    models: [transactions, finance]
+    description: Product family (Cards, Accounts, Personal Finance, ...)
+    synonyms: [product category, product type, category]
+  channel:
+    expr: "{alias}.channel"
+    models: [transactions, remittances]
+    description: Channel used (Mobile App, Internet Banking, POS, ATM, Branch)
+    synonyms: [channel, channels]
+  transaction_type:
+    expr: t.txn_type
+    models: [transactions]
+    description: Transaction type (Card Purchase, Transfer, Bill Payment, ...)
+    synonyms: [transaction type, txn type, type of transaction]
+  corridor:
+    expr: r.corridor
+    models: [remittances]
+    description: Remittance destination country
+    synonyms: [corridor, corridors, destination, destination country, country]
+  finance_status:
+    expr: f.status
+    models: [finance]
+    description: Delinquency bucket (Current, 30 DPD, 60 DPD, 90+ DPD, Closed)
+    synonyms: [status, finance status, delinquency, dpd bucket]
+
+# Business words for dimension values. Extend with: python scripts/teach.py alias "<word>" <dimension> "<value>"
+value_aliases:
+  kartu kredit: {dimension: product_category, value: Cards}
+
+# Time grains are generated from each model's time_column.
+time_grains: [day, week, month, quarter, year]
+
+# ---------------------------------------------------------------------
+metrics:
+  transaction_volume:
+    model: transactions
+    label: Transaction volume (SAR)
+    expr: SUM(t.amount_sar)
+    format: currency
+    owner: Retail Analytics
+    description: Total value of all customer transactions in SAR.
+    synonyms: [transaction volume, transaction value, spend, spending, volume, sales, total amount, transaction amount]
+  transaction_count:
+    model: transactions
+    label: Transactions (#)
+    expr: COUNT(*)
+    format: integer
+    owner: Retail Analytics
+    description: Number of transactions.
+    synonyms: [transaction count, number of transactions, transactions, txn count, how many transactions]
+  avg_ticket:
+    model: transactions
+    additive: false
+    label: Average ticket (SAR)
+    expr: SUM(t.amount_sar) / NULLIF(COUNT(*), 0)
+    format: currency
+    owner: Retail Analytics
+    description: Average transaction value = transaction_volume / transaction_count.
+    synonyms: [average ticket, average transaction, avg ticket, average transaction value, ticket size, basket size]
+  digital_adoption_rate:
+    model: transactions
+    additive: false
+    label: Digital adoption rate
+    expr: AVG(CASE WHEN t.is_digital THEN 1.0 ELSE 0.0 END)
+    format: percent
+    owner: Digital Banking
+    description: Share of transactions made via Mobile App or Internet Banking.
+    synonyms: [digital adoption, digital share, digital rate, digital penetration, digital adoption rate]
+  active_customers:
+    model: transactions
+    additive: false
+    label: Transacting customers
+    expr: COUNT(DISTINCT t.customer_id)
+    format: integer
+    owner: Retail Analytics
+    description: Distinct customers with at least one transaction in the period.
+    synonyms: [active customers, transacting customers, active users, monthly active customers]
+
+  finance_disbursed:
+    model: finance
+    label: Finance disbursed (SAR)
+    expr: SUM(f.principal_sar)
+    format: currency
+    owner: Retail Credit
+    description: Principal of Murabaha / Ijarah contracts disbursed in the period.
+    synonyms: [finance disbursed, disbursement, disbursements, loans disbursed, financing disbursed, disbursed, new financing]
+  outstanding_portfolio:
+    model: finance
+    label: Outstanding portfolio (SAR)
+    expr: SUM(f.outstanding_sar)
+    format: currency
+    owner: Retail Credit
+    description: Outstanding balance (principal + profit) of open contracts at the as-of date.
+    synonyms: [outstanding, outstanding portfolio, portfolio balance, outstanding balance, loan book, finance book]
+  npf_ratio:
+    model: finance
+    additive: false
+    label: NPF ratio (90+ DPD)
+    expr: >-
+      SUM(CASE WHEN f.status = '90+ DPD' THEN f.outstanding_sar ELSE 0 END)
+      / NULLIF(SUM(CASE WHEN f.status <> 'Closed' THEN f.outstanding_sar ELSE 0 END), 0)
+    format: percent
+    owner: Retail Credit Risk
+    description: Non-performing finance ratio = 90+ DPD outstanding / open outstanding (Islamic-banking equivalent of NPL).
+    synonyms: [npf, npf ratio, npl, npl ratio, non performing, non-performing, default rate, bad loans]
+  finance_contracts:
+    model: finance
+    label: Finance contracts (#)
+    expr: COUNT(*)
+    format: integer
+    owner: Retail Credit
+    description: Number of finance contracts disbursed.
+    synonyms: [finance contracts, number of contracts, loans count, number of loans, how many contracts]
+
+  remittance_volume:
+    model: remittances
+    label: Remittance volume (SAR)
+    expr: SUM(r.amount_sar)
+    format: currency
+    owner: Payments
+    description: Total value of outbound remittances.
+    synonyms: [remittance volume, remittance value, remittances, money sent abroad, transfers abroad, remittance amount]
+  remittance_count:
+    model: remittances
+    label: Remittances (#)
+    expr: COUNT(*)
+    format: integer
+    owner: Payments
+    description: Number of outbound remittances.
+    synonyms: [remittance count, number of remittances, how many remittances]
+  remittance_fee_income:
+    model: remittances
+    label: Remittance fee income (SAR)
+    expr: SUM(r.fee_sar)
+    format: currency
+    owner: Payments
+    description: Fee income earned on remittances.
+    synonyms: [remittance fee, remittance fees, fee income, remittance revenue, remittance income]
+
+  total_customers:
+    model: customers
+    label: Customers (#)
+    expr: COUNT(*)
+    format: integer
+    owner: Customer Analytics
+    description: Customers who joined in the period (all time when no date filter).
+    synonyms: [total customers, number of customers, customer count, customers, customer base]
+  new_customers:
+    model: customers
+    label: New customers (#)
+    expr: COUNT(*)
+    format: integer
+    owner: Customer Analytics
+    description: Customers onboarded in the period (by join date).
+    synonyms: [new customers, acquisitions, onboarded customers, new to bank, customer acquisition]
+  churned_customers:
+    model: churn
+    label: Churned customers (#)
+    expr: COUNT(*)
+    format: integer
+    owner: Customer Analytics
+    description: Customers who closed their relationship in the period (by churn date).
+    synonyms: [churned customers, churn, churners, attrition, lost customers, closed customers]

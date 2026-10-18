@@ -1,0 +1,124 @@
+# =====================================================================
+#  Cross-business impact hypotheses (curated, owned, testable)
+# ---------------------------------------------------------------------
+#  The Impact Analyst agent does not invent causal stories. Business owners
+#  write hypotheses here ("if X moves, Y should move"), and the agent TESTS
+#  each one against governed data, then reports: confirmed / contradicted /
+#  not detected, with effect size and a p-value.
+#
+#  Test types
+#    timeseries    : monthly growth of X vs growth of Y, lags 0..max_lag
+#    cross_section : X vs Y across groups (e.g. segment x region)
+#    cohort        : outcome compared between two cohorts (approved SQL template)
+#    event         : before/after a dated business event (see business_calendar.yaml)
+#
+#  Approved SQL templates return no identifiers and are checked by the SQL guard.
+# =====================================================================
+links:
+  - id: spend_to_remittance
+    title: Spending and remittances move together
+    from: {domain: retail, metric: transaction_volume}
+    to: {domain: payments, metric: remittance_volume}
+    hypothesis: Months with stronger customer spending also see stronger remittance outflows (shared salary and seasonal cycle).
+    expected: positive
+    if_confirmed: "Plan remittance liquidity and FX buffers on the same seasonal calendar as card spending (Ramadan, Eid, payday)."
+    if_not_detected: "Treat spending and remittances as independent planning lines."
+    owner: Payments
+    test: {type: timeseries, transform: growth, max_lag: 2}
+
+  - id: churn_to_credit_risk
+    title: Churned customers and credit risk
+    from: {domain: customer, metric: churned_customers}
+    to: {domain: credit, metric: npf_ratio}
+    hypothesis: Finance contracts of customers who left the bank are more likely to be non-performing.
+    expected: positive
+    if_confirmed: "Feed churn signals into early-warning credit monitoring; contact customers with open finance when they show exit behaviour."
+    if_not_detected: "Keep churn and credit monitoring separate."
+    owner: Retail Credit Risk
+    test:
+      type: cohort
+      cohorts: [Churned, Active]
+      outcome: NPF ratio (90+ DPD outstanding / open outstanding)
+      sql: |
+        SELECT CASE WHEN c.churn_date IS NOT NULL THEN 'Churned' ELSE 'Active' END AS cohort,
+               f.status, f.outstanding_sar
+        FROM fact_finance f
+        LEFT JOIN dim_customer c ON c.customer_id = f.customer_id
+        WHERE f.status <> 'Closed'
+        LIMIT 100000
+
+  - id: churn_npf_by_segment_region
+    title: Churn rate and NPF across segments and regions
+    from: {domain: customer, metric: churned_customers}
+    to: {domain: credit, metric: npf_ratio}
+    hypothesis: Segment-region groups with a higher churn rate carry a higher NPF ratio.
+    expected: positive
+    if_confirmed: "Prioritise retention budgets in the segment-region groups where churn and NPF are both high."
+    if_not_detected: "Retention and credit targeting can be planned separately."
+    owner: Retail Credit Risk
+    test: {type: cross_section, x: churn_rate, y: npf_ratio, dimensions: [segment, region]}
+
+  - id: fee_cut_unit_revenue
+    title: Fee cut and revenue per remittance
+    from: {domain: payments, event: digital_fee_cut}
+    to: {domain: payments, metric: fee_per_remittance}
+    hypothesis: After the digital fee cut, average fee income per remittance falls.
+    expected: negative
+    if_confirmed: "Track fee income per remittance as a pricing KPI and recover margin through FX spread or bundles."
+    if_not_detected: "No pricing action needed on unit revenue."
+    owner: Payments
+    test: {type: event, event: digital_fee_cut, series: fee_per_remittance, window: 6}
+
+  - id: fee_cut_volume_uplift
+    title: Fee cut and remittance activity
+    from: {domain: payments, event: digital_fee_cut}
+    to: {domain: payments, metric: remittance_count}
+    hypothesis: The fee cut was expected to lift remittance activity (year-over-year growth in transfers).
+    expected: positive
+    if_confirmed: "Keep the lower fee and scale digital remittance marketing."
+    if_not_detected: "Review the fee cut: unit revenue fell without a detectable lift in activity; consider targeted (corridor or segment) pricing instead of a blanket cut."
+    owner: Payments
+    test: {type: event, event: digital_fee_cut, series: remittance_count_yoy, window: 6}
+
+  - id: age_to_digital
+    title: Customer age and digital adoption
+    from: {domain: customer, dimension: age_band}
+    to: {domain: digital, metric: digital_adoption_rate}
+    hypothesis: Digital adoption falls as customer age rises, so the customer mix shapes digital targets.
+    expected: negative
+    if_confirmed: "Set digital-adoption targets by age band and focus assisted onboarding on 45+ customers."
+    if_not_detected: "Use one digital target for all customers."
+    owner: Digital Banking
+    test: {type: cross_section, x: age_rank, y: digital_adoption_rate, dimensions: [age_band]}
+
+  - id: acquisition_to_activity
+    title: New customers and next-month activity
+    from: {domain: customer, metric: new_customers}
+    to: {domain: retail, metric: active_customers}
+    hypothesis: Months with more new customers are followed by growth in transacting customers.
+    expected: positive
+    if_confirmed: "Count new-customer campaigns as a lever for next-month activity."
+    if_not_detected: "Pair acquisition campaigns with activation journeys; new customers alone did not lift next-month activity."
+    owner: Customer Analytics
+    test: {type: timeseries, transform: growth, max_lag: 2, x_transform: level}
+
+  # A deliberate control test. If this ever shows a "confirmed" link, the method is too loose.
+  - id: placebo_gender_credit
+    title: "Control: gender vs credit risk"
+    from: {domain: customer, dimension: gender}
+    to: {domain: credit, metric: npf_ratio}
+    hypothesis: No relationship is expected; included to check the method does not find links everywhere.
+    expected: none
+    if_confirmed: "Method check failed: tighten thresholds before trusting other links."
+    if_not_detected: "Control test passed: the method is not finding links everywhere."
+    owner: Analytics QA
+    test:
+      type: cohort
+      cohorts: [Female, Male]
+      outcome: NPF ratio (90+ DPD outstanding / open outstanding)
+      sql: |
+        SELECT c.gender AS cohort, f.status, f.outstanding_sar
+        FROM fact_finance f
+        LEFT JOIN dim_customer c ON c.customer_id = f.customer_id
+        WHERE f.status <> 'Closed'
+        LIMIT 100000

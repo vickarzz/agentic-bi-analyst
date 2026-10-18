@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    env:
+      BI_AGENT_PLANNER: rules        # deterministic, no API key needed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Generate synthetic data
+        run: python scripts/generate_data.py
+      - name: Unit + integration tests
+        run: python -m pytest -q
+      - name: Golden-question evaluation (fails below 90%)
+        run: python evals/run_evals.py --min-score 0.9
+      - name: Multi-agent business review
+        run: python -m bi_agent.orchestrator --out reports/business_review.md
+      - name: Publish eval report and briefing to the job summary
+        if: always()
+        run: |
+          cat evals/report.md >> "$GITHUB_STEP_SUMMARY"
+          cat reports/business_review.md >> "$GITHUB_STEP_SUMMARY" || true
